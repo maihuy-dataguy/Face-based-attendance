@@ -1,5 +1,6 @@
 import cv2
 import os
+import sys
 from flask import Flask,request,render_template
 from datetime import date
 from datetime import datetime
@@ -17,9 +18,16 @@ datetoday = date.today().strftime("%m_%d_%y")
 datetoday2 = date.today().strftime("%d-%B-%Y")
 
 
+def open_camera():
+    """Open webcam; use DirectShow on Windows to avoid MSMF warning/errors."""
+    if sys.platform == 'win32':
+        return cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    return cv2.VideoCapture(0)
+
+
 #### Initializing VideoCapture object to access WebCam
 face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-cap = cv2.VideoCapture(0)
+cap = open_camera()
 
 
 #### If these directories don't exist, create them
@@ -29,7 +37,7 @@ if not os.path.isdir('static/faces'):
     os.makedirs('static/faces')
 if f'Attendance-{datetoday}.csv' not in os.listdir('Attendance'):
     with open(f'Attendance/Attendance-{datetoday}.csv','w') as f:
-        f.write('Name,Roll,Time')
+        f.write('Name,Roll,Date,Check-In,Check-Out')
 
 
 #### get a number of total registered users
@@ -76,21 +84,68 @@ def extract_attendance():
     df = pd.read_csv(f'Attendance/Attendance-{datetoday}.csv')
     names = df['Name']
     rolls = df['Roll']
-    times = df['Time']
+    # Date column (backfill from today if missing)
+    if 'Date' in df.columns:
+        dates = df['Date'].fillna(datetoday2).astype(str)
+    else:
+        dates = pd.Series([datetoday2] * len(df))
+    # Support old format (Time) and new format (Check-In, Check-Out)
+    if 'Check-In' in df.columns:
+        check_ins = df['Check-In'].astype(str)
+        check_outs = df['Check-Out'].fillna('').astype(str)
+    else:
+        check_ins = df['Time'].astype(str) if 'Time' in df.columns else pd.Series([''] * len(df))
+        check_outs = pd.Series([''] * len(df))
     l = len(df)
-    return names,rolls,times,l
+    return names, rolls, dates, check_ins, check_outs, l
 
 
-#### Add Attendance of a specific user
+def _ensure_attendance_format(df):
+    """Ensure CSV has Date, Check-In, Check-Out as strings."""
+    if 'Date' not in df.columns:
+        df.insert(2, 'Date', datetoday2)
+    if 'Check-In' not in df.columns:
+        if 'Time' in df.columns:
+            df = df.rename(columns={'Time': 'Check-In'})
+            df['Check-Out'] = ''
+        else:
+            df['Check-In'] = ''
+            df['Check-Out'] = ''
+    for col in ['Check-In', 'Check-Out']:
+        if col in df.columns:
+            df[col] = df[col].fillna('').astype(str)
+    if 'Date' in df.columns:
+        df['Date'] = df['Date'].fillna(datetoday2).astype(str)
+    return df
+
+
+def _is_checked_in_today(name):
+    """True if this person is already in today's attendance (so next scan = check-out)."""
+    userid = name.split('_')[1]
+    csv_path = f'Attendance/Attendance-{datetoday}.csv'
+    if not os.path.isfile(csv_path):
+        return False
+    df = pd.read_csv(csv_path)
+    if 'Roll' not in df.columns:
+        return False
+    return int(userid) in list(df['Roll'])
+
+
+#### Record attendance: first time today = check-in, next time = check-out (one button for both)
 def add_attendance(name):
     username = name.split('_')[0]
     userid = name.split('_')[1]
     current_time = datetime.now().strftime("%H:%M:%S")
-    
-    df = pd.read_csv(f'Attendance/Attendance-{datetoday}.csv')
-    if int(userid) not in list(df['Roll']):
-        with open(f'Attendance/Attendance-{datetoday}.csv','a') as f:
-            f.write(f'\n{username},{userid},{current_time}')
+    csv_path = f'Attendance/Attendance-{datetoday}.csv'
+    df = pd.read_csv(csv_path)
+    df = _ensure_attendance_format(df)
+    roll_int = int(userid)
+    if roll_int not in list(df['Roll']):
+        new_row = pd.DataFrame([{'Name': username, 'Roll': roll_int, 'Date': datetoday2, 'Check-In': current_time, 'Check-Out': ''}])
+        df = pd.concat([df, new_row], ignore_index=True)
+    else:
+        df.loc[df['Roll'] == roll_int, 'Check-Out'] = current_time
+    df.to_csv(csv_path, index=False)
 
 
 ################## ROUTING FUNCTIONS #########################
@@ -98,25 +153,17 @@ def add_attendance(name):
 #### Our main page
 @app.route('/')
 def home():
-    names,rolls,times,l = extract_attendance()    
-    return render_template('home.html',names=names,rolls=rolls,times=times,l=l,totalreg=totalreg(),datetoday2=datetoday2) 
+    names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l, totalreg=totalreg(), datetoday2=datetoday2) 
 
-
-#### This function will run when we click on Take Attendance Button
-import time 
 
 import time
-import time
 
-@app.route('/start', methods=['GET'])
-def start():
-    if 'face_recognition_model.pkl' not in os.listdir('static'):
-        return render_template('home.html', totalreg=totalreg(), datetoday2=datetoday2,
-                               mess='There is no trained model in the static folder. Please add a new face to continue.')
-
-    cap = cv2.VideoCapture(0)
-    face_detected_time = None  
-    detected_person = None  
+def _attendance_camera():
+    """Open camera, wait for same face 5 sec, then record check-in or check-out once. Returns attendance data."""
+    cap = open_camera()
+    face_detected_time = None
+    detected_person = None
 
     while True:
         ret, frame = cap.read()
@@ -124,39 +171,63 @@ def start():
             break
 
         faces = extract_faces(frame)
-
         if len(faces) != 0:
             (x, y, w, h) = faces[0]
             cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
-
             face = cv2.resize(frame[y:y + h, x:x + w], (50, 50))
             identified_person = identify_face(face.reshape(1, -1))[0]
-            add_attendance(identified_person)  
-
-            cv2.putText(frame, f'{identified_person}', (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 20), 2, cv2.LINE_AA)
+            display_name = identified_person.split('_')[0]
+            action = 'Check-out' if _is_checked_in_today(identified_person) else 'Check-in'
+            text_y = max(y - 8, 24)
+            cv2.putText(frame, f'{display_name}  |  {action}', (x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 20), 2, cv2.LINE_AA)
 
             if face_detected_time is None:
                 face_detected_time = time.time()
-                detected_person = identified_person  
+                detected_person = identified_person
+            elif detected_person != identified_person:
+                face_detected_time = time.time()
+                detected_person = identified_person
 
-            if time.time() - face_detected_time >= 5:  
-                break  
+            if time.time() - face_detected_time >= 5:
+                add_attendance(detected_person)
+                break
+        else:
+            face_detected_time = None
+            detected_person = None
 
         cv2.imshow('Attendance', frame)
-        if cv2.waitKey(1) == 27:  
+        if cv2.waitKey(1) == 27:
             break
 
     cap.release()
     cv2.destroyAllWindows()
+    return extract_attendance()
 
-    # Fetch updated attendance list
-    names, rolls, times, l = extract_attendance()
-    
-    return render_template('home.html', names=names, rolls=rolls, times=times, l=l,
+
+def _check_model_and_reg():
+    """Return (err_kwargs, None) if error else (None, None). err_kwargs are kwargs for render_template('home.html', **err)."""
+    if totalreg() == 0:
+        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+        return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+                    totalreg=totalreg(), datetoday2=datetoday2, mess='No users in database. Please add a new user first.'), None
+    if 'face_recognition_model.pkl' not in os.listdir('static'):
+        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+        return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+                    totalreg=totalreg(), datetoday2=datetoday2,
+                    mess='There is no trained model in the static folder. Please add a new face to continue.'), None
+    return None, None
+
+
+@app.route('/start', methods=['GET'])
+def start():
+    """One button: first scan today = check-in, later scan = check-out."""
+    err, _ = _check_model_and_reg()
+    if err is not None:
+        return render_template('home.html', **err)
+    names, rolls, dates, check_ins, check_outs, l = _attendance_camera()
+    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
                            totalreg=totalreg(), datetoday2=datetoday2)
 
-
- 
 
 
 #### This function will run when we add a new user
@@ -171,7 +242,7 @@ def add():
     if not os.path.isdir(userimagefolder):
         os.makedirs(userimagefolder)  # Create folder if it doesn't exist
 
-    cap = cv2.VideoCapture(0)
+    cap = open_camera()
     i, j = 0, 0
 
     while i < 50:  # Capture 50 images per user
@@ -205,10 +276,8 @@ def add():
     train_model()  # Train the model after capturing images
 
     # Fetch updated attendance list
-    names, rolls, times, l = extract_attendance()
-
-    # Return updated home page
-    return render_template('home.html', names=names, rolls=rolls, times=times, l=l,
+    names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
                            totalreg=totalreg(), datetoday2=datetoday2)
  
 

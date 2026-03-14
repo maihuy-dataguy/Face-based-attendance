@@ -67,12 +67,11 @@ text-transform: uppercase;}
 </head>
   
 <body>
-z
     <div class='mt-3 text-center'>
         <h1 style="width: auto;margin: auto;color: #0b4c61;padding: 11px;font-size: 44px;">Intelligent Attendance System 
             Utilizing Facial Recognition Technology</h1>
-        <h6 style="width: auto;margin: auto;color: #0b4c61;padding: 11px;font-size: 15px;">Developed by: Syed Rizvi</h1>
-            <img src="{{url_for('static', filename='logo.jpg')}}" alt="logo" width="150px" height="150px"  />
+        <h6 style="width: auto;margin: auto;color: #0b4c61;padding: 11px;font-size: 15px;">Developed by: huy.mai</h6>
+            <img src="{{url_for('static', filename='ncc.png')}}" alt="logo" width="150px" height="150px"  />
 
     </div>
 
@@ -92,34 +91,34 @@ z
             style="border-radius: 20px;padding: 0px;background-color:rgba(211, 211, 211, 0.911);margin:0px 10px 10px 10px;min-height: 400px;">
             <h2 style="border-radius: 20px 20px 0px 0px;background-color: #0b4c61;color: white;padding: 10px;">Today's
                 Attendance <i class="material-icons">assignment</i></h2>
-            <a style="text-decoration: none;max-width: 300px;" href="/start">
-                <button
-                    style="font-size: 24px;font-weight: bold;border-radius: 10px;width:490px;padding: 10px;margin-top: 30px;margin-bottom: 30px;"
-                    type='submit' class='btn btn-primary'>Take Attendance <i
-                        class="material-icons">beenhere</i></button>
+            <a style="text-decoration: none;" href="/start">
+                <button style="font-size: 24px;font-weight: bold;border-radius: 10px;width:320px;padding: 10px;margin-top: 20px;margin-bottom: 20px;"
+                    type='button' class='btn btn-primary'>Take Attendance <i class="material-icons">beenhere</i></button>
             </a>
             <table style="background-color: white;">
                 <tr>
                     <td><b>S No</b></td>
                     <td><b>Name</b></td>
                     <td><b>ID</b></td>
-                    <td><b>Time</b></td>
+                    <td><b>Date</b></td>
+                    <td><b>Check-In Time</b></td>
+                    <td><b>Check-Out Time</b></td>
                 </tr>
                 {% if l %}
-
                 {% for i in range(l) %}
                 <tr>
                     <td>{{ i+1 }}</td>
                     <td>{{ names[i] }}</td>
                     <td>{{ rolls[i] }}</td>
-                    <td>{{ times[i] }}</td>
+                    <td>{{ dates[i] }}</td>
+                    <td>{{ check_ins[i] }}</td>
+                    <td>{{ check_outs[i] if check_outs[i] else '—' }}</td>
                 </tr>
                 {% endfor %}
                 {% endif %}
             </table>
 
         </div>
-
         <div class="col"
             style="border-radius: 20px;padding: 0px;background-color:rgba(211, 211, 211, 0.911);margin:0px 10px 10px 10px;height: 400px;">
             <form action='/add' method="POST" enctype="multipart/form-data">
