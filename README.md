@@ -1,4 +1,4 @@
-# Facial-Recognition-Based-Attendance-System-For-Teachers-and-Students-Using-Machine-Learning
+# Facial-Recognition-Based-Attendance-System
 
 Welcome to the GitHub repository for the project: a Facial Recognition-Based Attendance System designed for teachers and students. This project was developed in collaboration with a local non-profit organization aiming to bring sustainable, low computational cost solutions for automatic attendance systems to resource-limited schools in Pakistan.
 
