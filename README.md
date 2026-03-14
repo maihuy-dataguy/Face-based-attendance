@@ -38,7 +38,7 @@ Ensure you have the following installed:
 2. Navigate to the cloned repository:
 
 ```bash
- cd Facial-Recognition-Based-Attendance-System-For-Teachers-and-Students-Using-Machine-Learning
+ cd Face-based-attendance
 ```
 
 3. Install the required dependencies:
