@@ -1,3 +1,4 @@
+import math
 import cv2
 import os
 import sys
@@ -7,6 +8,7 @@ import numpy as np
 import pandas as pd
 from flask import Flask, request, render_template
 from datetime import date, datetime
+from sklearn import neighbors
 
 import face_recognition
 
@@ -18,6 +20,7 @@ datetoday = date.today().strftime("%m_%d_%y")
 datetoday2 = date.today().strftime("%d-%B-%Y")
 
 KNOWN_FACES_PATH = 'static/known_faces.pkl'
+KNN_MODEL_PATH = 'static/trained_knn_model.clf'
 
 def open_camera():
     """Open webcam; use DirectShow on Windows to avoid MSMF warning/errors."""
@@ -34,6 +37,67 @@ if not os.path.isdir('static/faces'):
 if f'Attendance-{datetoday}.csv' not in os.listdir('Attendance'):
     with open(f'Attendance/Attendance-{datetoday}.csv', 'w') as f:
         f.write('Name,Roll,Date,Check-In,Check-Out')
+
+# Haar cascade for Add User (capture 50 face crops without running dlib on webcam)
+_haar_face = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+
+def _face_boxes_haar(frame):
+    """Detect faces with Haar; returns list of (x, y, w, h)."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if _haar_face.empty():
+        return []
+    rects = _haar_face.detectMultiScale(gray, 1.3, 5)
+    return list(rects)
+
+
+def train_knn(train_dir, model_save_path, n_neighbors=None, knn_algo='ball_tree'):
+    """
+    Train a KNN classifier for face recognition (from face_recognition_knn.py).
+    Each subdir in train_dir is one person; images with exactly one face are used.
+    """
+    X = []
+    y = []
+    for class_dir in os.listdir(train_dir):
+        class_path = os.path.join(train_dir, class_dir)
+        if not os.path.isdir(class_path):
+            continue
+        for fname in os.listdir(class_path):
+            if not fname.lower().endswith(('.png', '.jpg', '.jpeg')):
+                continue
+            img_path = os.path.join(class_path, fname)
+            try:
+                image = face_recognition.load_image_file(img_path)
+                face_bounding_boxes = face_recognition.face_locations(image)
+                if len(face_bounding_boxes) != 1:
+                    continue
+                enc = face_recognition.face_encodings(image, known_face_locations=face_bounding_boxes)[0]
+                X.append(enc)
+                y.append(class_dir)
+            except Exception:
+                continue
+    if len(X) == 0:
+        return None
+    if n_neighbors is None:
+        n_neighbors = int(round(math.sqrt(len(X))))
+    knn_clf = neighbors.KNeighborsClassifier(n_neighbors=n_neighbors, algorithm=knn_algo, weights='distance')
+    knn_clf.fit(X, y)
+    with open(model_save_path, 'wb') as f:
+        pickle.dump(knn_clf, f)
+    return knn_clf
+
+
+def predict_with_knn(face_encoding, model_path, distance_threshold=0.6):
+    """Predict name for one face encoding using trained KNN; returns name or None if unknown."""
+    if not os.path.isfile(model_path):
+        return None
+    with open(model_path, 'rb') as f:
+        knn_clf = pickle.load(f)
+    pred = knn_clf.predict([face_encoding])[0]
+    dists = knn_clf.kneighbors([face_encoding], n_neighbors=1)
+    if dists[0][0][0] <= distance_threshold:
+        return pred
+    return None
 
 
 def get_known_faces():
@@ -198,7 +262,6 @@ def _attendance_camera():
     process_this_frame = True
     last_box = None
     last_label = None
-    known_encodings, known_names = get_known_faces()
 
     while True:
         ret, frame = cap.read()
@@ -209,16 +272,14 @@ def _attendance_camera():
             small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
             rgb_small = small_frame[:, :, ::-1]
             face_boxes = extract_faces_rgb(rgb_small, small_frame=rgb_small)
-            last_box = None
-            last_label = None
-
+            # Only update last_box/last_label when a face is detected; do not clear on missed frames to avoid flicker
             if face_boxes:
                 (x, y, w, h) = face_boxes[0]
                 rgb_frame = frame[:, :, ::-1]
                 top, right, bottom, left = y, x + w, y + h, x
                 face_encodings = face_recognition.face_encodings(rgb_frame, [(top, right, bottom, left)])
                 if face_encodings:
-                    identified_person = identify_face_from_encoding(face_encodings[0], known_encodings, known_names)
+                    identified_person = predict_with_knn(face_encodings[0], KNN_MODEL_PATH)
                     if identified_person:
                         display_name = identified_person.split('_')[0]
                         action = 'Check-out' if _is_checked_in_today(identified_person) else 'Check-in'
@@ -235,7 +296,7 @@ def _attendance_camera():
                             face_detected_time = time.time()
                             detected_person = identified_person
 
-                        if time.time() - face_detected_time >= 5:
+                        if time.time() - face_detected_time >= 2:
                             add_attendance(detected_person)
                             break
                     else:
@@ -251,6 +312,7 @@ def _attendance_camera():
                     last_box = (x, y, w, h)
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
             else:
+                # No face this frame: reset 5s timer only; keep last_box so the display does not flicker
                 face_detected_time = None
                 detected_person = None
         elif last_box is not None:
@@ -274,12 +336,14 @@ def _check_model_and_reg():
         names, rolls, dates, check_ins, check_outs, l = extract_attendance()
         return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
                     totalreg=totalreg(), datetoday2=datetoday2, mess='No users in database. Please add a new user first.'), None
-    known_encodings, known_names = get_known_faces()
-    if not known_encodings or not known_names:
-        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
-        return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                    totalreg=totalreg(), datetoday2=datetoday2,
-                    mess='No known faces. Please add a new user (with clear face photos).'), None
+    if not os.path.isfile(KNN_MODEL_PATH):
+        if totalreg() > 0:
+            train_knn('static/faces', KNN_MODEL_PATH)
+        if not os.path.isfile(KNN_MODEL_PATH):
+            names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+            return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+                        totalreg=totalreg(), datetoday2=datetoday2,
+                        mess='No trained model. Please add a new user first.'), None
     return None, None
 
 
@@ -301,46 +365,37 @@ def add():
     if not os.path.isdir(userimagefolder):
         os.makedirs(userimagefolder)
 
-    known_encodings, known_names = get_known_faces()
     cap = open_camera()
-    photo_path = os.path.join(userimagefolder, f'{newusername}_{newuserid}.jpg')
+    i, j = 0, 0
+    target_count = 50
 
-    while True:
+    while i < target_count:
         ret, frame = cap.read()
         if not ret:
             break
-        cv2.putText(frame, 'Press SPACE to take photo (ESC to cancel)', (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 20), 2, cv2.LINE_AA)
+        face_boxes = _face_boxes_haar(frame)
+        for (x, y, w, h) in face_boxes:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
+            if j % 5 == 0:
+                img_path = os.path.join(userimagefolder, f'{newusername}_{i}.jpg')
+                face_crop = frame[y:y + h, x:x + w]
+                cv2.imwrite(img_path, face_crop)
+                i += 1
+                if i >= target_count:
+                    break
+            j += 1
+        cv2.putText(frame, f'Images captured: {i}/{target_count}', (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 20), 2, cv2.LINE_AA)
         cv2.imshow('Adding New User', frame)
-        key = cv2.waitKey(1)
-        if key == 27:  # ESC
-            break
-        if key == 32:  # SPACE - save full frame (one picture, no crop)
-            cv2.imwrite(photo_path, frame)
+        if cv2.waitKey(1) == 27:
             break
 
     cap.release()
     cv2.destroyAllWindows()
 
-    user_encodings = []
-    if os.path.isfile(photo_path):
-        try:
-            img = face_recognition.load_image_file(photo_path)
-            encs = face_recognition.face_encodings(img)
-            if encs:
-                user_encodings.append(encs[0])
-        except Exception:
-            pass
-
-    if user_encodings:
-        new_encoding = user_encodings[0]
-        user_label = f'{newusername}_{newuserid}'
-        known_encodings.append(new_encoding)
-        known_names.append(user_label)
-        with open(KNOWN_FACES_PATH, 'wb') as f:
-            pickle.dump({'encodings': known_encodings, 'names': known_names}, f)
-        print(f"Saved encoding for {user_label}")
-    else:
-        print("Warning: No face encodings extracted from captured images.")
+    # Train KNN on all users in static/faces (including the new 50 images)
+    if os.path.isdir(userimagefolder) and len(os.listdir(userimagefolder)) > 0:
+        train_knn('static/faces', KNN_MODEL_PATH)
+        print(f"Saved 50 images and retrained KNN for {newusername}_{newuserid}")
 
     names, rolls, dates, check_ins, check_outs, l = extract_attendance()
     return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,

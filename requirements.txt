@@ -3,5 +3,6 @@ flask
 datetime
 numpy
 pandas
+scikit-learn
 # Install models from git first so face_recognition finds them (see issue #907)
 face_recognition==1.3.0
