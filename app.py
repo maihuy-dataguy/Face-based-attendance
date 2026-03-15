@@ -1,22 +1,23 @@
 import cv2
 import os
 import sys
-from flask import Flask,request,render_template
-from datetime import date
-from datetime import datetime
+import time
+import pickle
 import numpy as np
-from sklearn.neighbors import KNeighborsClassifier
 import pandas as pd
-import joblib
+from flask import Flask, request, render_template
+from datetime import date, datetime
+
+import face_recognition
 
 #### Defining Flask App
 app = Flask(__name__)
-
 
 #### Saving Date today in 2 different formats
 datetoday = date.today().strftime("%m_%d_%y")
 datetoday2 = date.today().strftime("%d-%B-%Y")
 
+KNOWN_FACES_PATH = 'static/known_faces.pkl'
 
 def open_camera():
     """Open webcam; use DirectShow on Windows to avoid MSMF warning/errors."""
@@ -25,71 +26,107 @@ def open_camera():
     return cv2.VideoCapture(0)
 
 
-#### Initializing VideoCapture object to access WebCam
-face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-cap = open_camera()
-
-
 #### If these directories don't exist, create them
 if not os.path.isdir('Attendance'):
     os.makedirs('Attendance')
 if not os.path.isdir('static/faces'):
     os.makedirs('static/faces')
 if f'Attendance-{datetoday}.csv' not in os.listdir('Attendance'):
-    with open(f'Attendance/Attendance-{datetoday}.csv','w') as f:
+    with open(f'Attendance/Attendance-{datetoday}.csv', 'w') as f:
         f.write('Name,Roll,Date,Check-In,Check-Out')
 
 
-#### get a number of total registered users
+def get_known_faces():
+    """Load (encodings, names) from pickle or build from static/faces folders."""
+    if os.path.isfile(KNOWN_FACES_PATH):
+        try:
+            with open(KNOWN_FACES_PATH, 'rb') as f:
+                data = pickle.load(f)
+            if data.get('encodings') and data.get('names'):
+                return data['encodings'], data['names']
+        except Exception:
+            pass
+    encodings, names = _build_known_faces_from_folders()
+    if encodings:
+        with open(KNOWN_FACES_PATH, 'wb') as f:
+            pickle.dump({'encodings': encodings, 'names': names}, f)
+    return encodings, names
+
+
+def _build_known_faces_from_folders():
+    """Build known face encodings from static/faces/{name_id}/*.jpg"""
+    encodings = []
+    names = []
+    faces_dir = 'static/faces'
+    if not os.path.isdir(faces_dir):
+        return encodings, names
+    for user in os.listdir(faces_dir):
+        user_path = os.path.join(faces_dir, user)
+        if not os.path.isdir(user_path):
+            continue
+        user_encodings = []
+        for fname in os.listdir(user_path):
+            if not fname.lower().endswith(('.jpg', '.jpeg', '.png')):
+                continue
+            img_path = os.path.join(user_path, fname)
+            try:
+                img = face_recognition.load_image_file(img_path)
+                encs = face_recognition.face_encodings(img)
+                if encs:
+                    user_encodings.append(encs[0])
+            except Exception:
+                continue
+        if user_encodings:
+            encodings.append(np.mean(user_encodings, axis=0))
+            names.append(user)
+    return encodings, names
+
+
 def totalreg():
     return len(os.listdir('static/faces'))
 
 
-#### extract the face from an image
-def extract_faces(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    if face_detector.empty():
-        print("Error: Haarcascade file not loaded properly.")
-        return []
-    face_points = face_detector.detectMultiScale(gray, 1.3, 5)
-    return face_points if len(face_points) > 0 else []
+def extract_faces_rgb(rgb_frame, small_frame=None):
+    """
+    Detect faces using face_recognition. Returns list of (x, y, w, h) in original frame coordinates.
+    If small_frame is provided (e.g. 1/4 size), scale is 4; otherwise scale is 1.
+    """
+    scale = 4 if small_frame is not None else 1
+    if small_frame is not None:
+        frame_to_use = small_frame
+    else:
+        frame_to_use = rgb_frame
+    face_locations = face_recognition.face_locations(frame_to_use)
+    out = []
+    for (top, right, bottom, left) in face_locations:
+        x = left * scale
+        y = top * scale
+        w = (right - left) * scale
+        h = (bottom - top) * scale
+        out.append((x, y, w, h))
+    return out
 
 
-
-#### Identify face using ML model
-def identify_face(facearray):
-    model = joblib.load('static/face_recognition_model.pkl')
-    return model.predict(facearray)
-
-
-#### A function which trains the model on all the faces available in faces folder
-def train_model():
-    faces = []
-    labels = []
-    userlist = os.listdir('static/faces')
-    for user in userlist:
-        for imgname in os.listdir(f'static/faces/{user}'):
-            img = cv2.imread(f'static/faces/{user}/{imgname}')
-            resized_face = cv2.resize(img, (50, 50))
-            faces.append(resized_face.ravel())
-            labels.append(user)
-    faces = np.array(faces)
-    knn = KNeighborsClassifier(n_neighbors=5)
-    knn.fit(faces,labels)
-    joblib.dump(knn,'static/face_recognition_model.pkl')
+def identify_face_from_encoding(face_encoding, known_encodings, known_names, tolerance=0.6):
+    """Match one face encoding to known encodings. Returns name or None."""
+    if not known_encodings or not known_names:
+        return None
+    matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=tolerance)
+    face_distances = face_recognition.face_distance(known_encodings, face_encoding)
+    best_idx = np.argmin(face_distances)
+    if matches[best_idx]:
+        return known_names[best_idx]
+    return None
 
 
-#### Extract info from today's attendance file in attendance folder
 def extract_attendance():
     df = pd.read_csv(f'Attendance/Attendance-{datetoday}.csv')
     names = df['Name']
     rolls = df['Roll']
-    # Date column (backfill from today if missing)
     if 'Date' in df.columns:
         dates = df['Date'].fillna(datetoday2).astype(str)
     else:
         dates = pd.Series([datetoday2] * len(df))
-    # Support old format (Time) and new format (Check-In, Check-Out)
     if 'Check-In' in df.columns:
         check_ins = df['Check-In'].astype(str)
         check_outs = df['Check-Out'].fillna('').astype(str)
@@ -101,7 +138,6 @@ def extract_attendance():
 
 
 def _ensure_attendance_format(df):
-    """Ensure CSV has Date, Check-In, Check-Out as strings."""
     if 'Date' not in df.columns:
         df.insert(2, 'Date', datetoday2)
     if 'Check-In' not in df.columns:
@@ -120,7 +156,6 @@ def _ensure_attendance_format(df):
 
 
 def _is_checked_in_today(name):
-    """True if this person is already in today's attendance (so next scan = check-out)."""
     userid = name.split('_')[1]
     csv_path = f'Attendance/Attendance-{datetoday}.csv'
     if not os.path.isfile(csv_path):
@@ -131,7 +166,6 @@ def _is_checked_in_today(name):
     return int(userid) in list(df['Roll'])
 
 
-#### Record attendance: first time today = check-in, next time = check-out (one button for both)
 def add_attendance(name):
     username = name.split('_')[0]
     userid = name.split('_')[1]
@@ -148,53 +182,84 @@ def add_attendance(name):
     df.to_csv(csv_path, index=False)
 
 
-################## ROUTING FUNCTIONS #########################
+################## ROUTING #########################
 
-#### Our main page
 @app.route('/')
 def home():
     names, rolls, dates, check_ins, check_outs, l = extract_attendance()
-    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l, totalreg=totalreg(), datetoday2=datetoday2) 
+    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l, totalreg=totalreg(), datetoday2=datetoday2)
 
-
-import time
 
 def _attendance_camera():
-    """Open camera, wait for same face 5 sec, then record check-in or check-out once. Returns attendance data."""
+    """Open camera, wait for same face 5 sec, then record check-in or check-out once."""
     cap = open_camera()
     face_detected_time = None
     detected_person = None
+    process_this_frame = True
+    last_box = None
+    last_label = None
+    known_encodings, known_names = get_known_faces()
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        faces = extract_faces(frame)
-        if len(faces) != 0:
-            (x, y, w, h) = faces[0]
+        if process_this_frame:
+            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+            rgb_small = small_frame[:, :, ::-1]
+            face_boxes = extract_faces_rgb(rgb_small, small_frame=rgb_small)
+            last_box = None
+            last_label = None
+
+            if face_boxes:
+                (x, y, w, h) = face_boxes[0]
+                rgb_frame = frame[:, :, ::-1]
+                top, right, bottom, left = y, x + w, y + h, x
+                face_encodings = face_recognition.face_encodings(rgb_frame, [(top, right, bottom, left)])
+                if face_encodings:
+                    identified_person = identify_face_from_encoding(face_encodings[0], known_encodings, known_names)
+                    if identified_person:
+                        display_name = identified_person.split('_')[0]
+                        action = 'Check-out' if _is_checked_in_today(identified_person) else 'Check-in'
+                        last_label = f'{display_name}  |  {action}'
+                        last_box = (x, y, w, h)
+                        text_y = max(y - 8, 24)
+                        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
+                        cv2.putText(frame, last_label, (x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 20), 2, cv2.LINE_AA)
+
+                        if face_detected_time is None:
+                            face_detected_time = time.time()
+                            detected_person = identified_person
+                        elif detected_person != identified_person:
+                            face_detected_time = time.time()
+                            detected_person = identified_person
+
+                        if time.time() - face_detected_time >= 5:
+                            add_attendance(detected_person)
+                            break
+                    else:
+                        face_detected_time = None
+                        detected_person = None
+                        last_box = (x, y, w, h)
+                        last_label = 'Unknown'
+                        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
+                        cv2.putText(frame, 'Unknown', (x, max(y - 8, 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+                else:
+                    face_detected_time = None
+                    detected_person = None
+                    last_box = (x, y, w, h)
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
+            else:
+                face_detected_time = None
+                detected_person = None
+        elif last_box is not None:
+            x, y, w, h = last_box
             cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
-            face = cv2.resize(frame[y:y + h, x:x + w], (50, 50))
-            identified_person = identify_face(face.reshape(1, -1))[0]
-            display_name = identified_person.split('_')[0]
-            action = 'Check-out' if _is_checked_in_today(identified_person) else 'Check-in'
-            text_y = max(y - 8, 24)
-            cv2.putText(frame, f'{display_name}  |  {action}', (x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 20), 2, cv2.LINE_AA)
+            if last_label:
+                cv2.putText(frame, last_label, (x, max(y - 8, 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 20) if last_label != 'Unknown' else (0, 0, 255), 2, cv2.LINE_AA)
 
-            if face_detected_time is None:
-                face_detected_time = time.time()
-                detected_person = identified_person
-            elif detected_person != identified_person:
-                face_detected_time = time.time()
-                detected_person = identified_person
-
-            if time.time() - face_detected_time >= 5:
-                add_attendance(detected_person)
-                break
-        else:
-            face_detected_time = None
-            detected_person = None
-
+        process_this_frame = not process_this_frame
         cv2.imshow('Attendance', frame)
         if cv2.waitKey(1) == 27:
             break
@@ -205,22 +270,21 @@ def _attendance_camera():
 
 
 def _check_model_and_reg():
-    """Return (err_kwargs, None) if error else (None, None). err_kwargs are kwargs for render_template('home.html', **err)."""
     if totalreg() == 0:
         names, rolls, dates, check_ins, check_outs, l = extract_attendance()
         return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
                     totalreg=totalreg(), datetoday2=datetoday2, mess='No users in database. Please add a new user first.'), None
-    if 'face_recognition_model.pkl' not in os.listdir('static'):
+    known_encodings, known_names = get_known_faces()
+    if not known_encodings or not known_names:
         names, rolls, dates, check_ins, check_outs, l = extract_attendance()
         return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
                     totalreg=totalreg(), datetoday2=datetoday2,
-                    mess='There is no trained model in the static folder. Please add a new face to continue.'), None
+                    mess='No known faces. Please add a new user (with clear face photos).'), None
     return None, None
 
 
 @app.route('/start', methods=['GET'])
 def start():
-    """One button: first scan today = check-in, later scan = check-out."""
     err, _ = _check_model_and_reg()
     if err is not None:
         return render_template('home.html', **err)
@@ -229,59 +293,59 @@ def start():
                            totalreg=totalreg(), datetoday2=datetoday2)
 
 
-
-#### This function will run when we add a new user
 @app.route('/add', methods=['POST'])
 def add():
-    # Get user input from form
     newusername = request.form['newusername']
     newuserid = request.form['newuserid']
-    
-    # Define folder to store images in "static/faces"
     userimagefolder = f'static/faces/{newusername}_{newuserid}'
     if not os.path.isdir(userimagefolder):
-        os.makedirs(userimagefolder)  # Create folder if it doesn't exist
+        os.makedirs(userimagefolder)
 
+    known_encodings, known_names = get_known_faces()
     cap = open_camera()
-    i, j = 0, 0
+    photo_path = os.path.join(userimagefolder, f'{newusername}_{newuserid}.jpg')
 
-    while i < 50:  # Capture 50 images per user
+    while True:
         ret, frame = cap.read()
         if not ret:
             break
-
-        faces = extract_faces(frame)
-        for (x, y, w, h) in faces:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
-            cv2.putText(frame, f'Images Captured: {i}/50', (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 20), 2, cv2.LINE_AA)
-
-            if j % 5 == 0:  # Capture every 5th frame for variation
-                img_name = f"{newusername}_{i}.jpg"
-                img_path = os.path.join(userimagefolder, img_name)
-                face_crop = frame[y:y + h, x:x + w]  # Crop only the face
-                cv2.imwrite(img_path, face_crop)  # Save cropped face image
-                i += 1
-
-            j += 1
-
+        cv2.putText(frame, 'Press SPACE to take photo (ESC to cancel)', (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 20), 2, cv2.LINE_AA)
         cv2.imshow('Adding New User', frame)
-        if cv2.waitKey(1) == 27:  # Press ESC to exit
+        key = cv2.waitKey(1)
+        if key == 27:  # ESC
+            break
+        if key == 32:  # SPACE - save full frame (one picture, no crop)
+            cv2.imwrite(photo_path, frame)
             break
 
     cap.release()
     cv2.destroyAllWindows()
 
-    print(f"✅ Images stored in {userimagefolder}")
-    print("⚡ Training Model with New Data...")
-    train_model()  # Train the model after capturing images
+    user_encodings = []
+    if os.path.isfile(photo_path):
+        try:
+            img = face_recognition.load_image_file(photo_path)
+            encs = face_recognition.face_encodings(img)
+            if encs:
+                user_encodings.append(encs[0])
+        except Exception:
+            pass
 
-    # Fetch updated attendance list
+    if user_encodings:
+        new_encoding = user_encodings[0]
+        user_label = f'{newusername}_{newuserid}'
+        known_encodings.append(new_encoding)
+        known_names.append(user_label)
+        with open(KNOWN_FACES_PATH, 'wb') as f:
+            pickle.dump({'encodings': known_encodings, 'names': known_names}, f)
+        print(f"Saved encoding for {user_label}")
+    else:
+        print("Warning: No face encodings extracted from captured images.")
+
     names, rolls, dates, check_ins, check_outs, l = extract_attendance()
     return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
                            totalreg=totalreg(), datetoday2=datetoday2)
- 
 
 
-#### Our main function which runs the Flask App
 if __name__ == '__main__':
     app.run(debug=True)
