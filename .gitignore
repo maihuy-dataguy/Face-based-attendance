@@ -3,4 +3,5 @@ __pycache__/
 .vscode/
 static/faces/*
 static/known_faces.pkl
+static/trained_knn_model.clf
 Attendance/*

@@ -1,4 +1,6 @@
+import asyncio
 import math
+import threading
 import cv2
 import os
 import sys
@@ -21,6 +23,9 @@ datetoday2 = date.today().strftime("%d-%B-%Y")
 
 KNOWN_FACES_PATH = 'static/known_faces.pkl'
 KNN_MODEL_PATH = 'static/trained_knn_model.clf'
+
+# Only one camera operation at a time (Take Attendance or Add User); prevents crash when both run together
+_camera_lock = threading.Lock()
 
 def open_camera():
     """Open webcam; use DirectShow on Windows to avoid MSMF warning/errors."""
@@ -249,7 +254,7 @@ def add_attendance(name):
 ################## ROUTING #########################
 
 @app.route('/')
-def home():
+async def home():
     names, rolls, dates, check_ins, check_outs, l = extract_attendance()
     return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l, totalreg=totalreg(), datetoday2=datetoday2)
 
@@ -312,9 +317,8 @@ def _attendance_camera():
                     last_box = (x, y, w, h)
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
             else:
-                # No face this frame: reset 5s timer only; keep last_box so the display does not flicker
-                face_detected_time = None
-                detected_person = None
+                # No face this frame: keep last_box and timer so display and hold state don't reset on brief misses
+                pass
         elif last_box is not None:
             x, y, w, h = last_box
             cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
@@ -348,19 +352,25 @@ def _check_model_and_reg():
 
 
 @app.route('/start', methods=['GET'])
-def start():
-    err, _ = _check_model_and_reg()
-    if err is not None:
-        return render_template('home.html', **err)
-    names, rolls, dates, check_ins, check_outs, l = _attendance_camera()
-    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                           totalreg=totalreg(), datetoday2=datetoday2)
+async def start():
+    if not _camera_lock.acquire(blocking=False):
+        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+        return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+                               totalreg=totalreg(), datetoday2=datetoday2,
+                               mess='Camera is in use (e.g. Add User or another Take Attendance). Please wait and try again.')
+    try:
+        err, _ = _check_model_and_reg()
+        if err is not None:
+            return render_template('home.html', **err)
+        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_attendance_camera)
+        return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+                               totalreg=totalreg(), datetoday2=datetoday2)
+    finally:
+        _camera_lock.release()
 
 
-@app.route('/add', methods=['POST'])
-def add():
-    newusername = request.form['newusername']
-    newuserid = request.form['newuserid']
+def _add_user(newusername, newuserid):
+    """Blocking: capture 50 face images and train KNN. Returns template data dict."""
     userimagefolder = f'static/faces/{newusername}_{newuserid}'
     if not os.path.isdir(userimagefolder):
         os.makedirs(userimagefolder)
@@ -392,14 +402,28 @@ def add():
     cap.release()
     cv2.destroyAllWindows()
 
-    # Train KNN on all users in static/faces (including the new 50 images)
     if os.path.isdir(userimagefolder) and len(os.listdir(userimagefolder)) > 0:
         train_knn('static/faces', KNN_MODEL_PATH)
         print(f"Saved 50 images and retrained KNN for {newusername}_{newuserid}")
 
     names, rolls, dates, check_ins, check_outs, l = extract_attendance()
-    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                           totalreg=totalreg(), datetoday2=datetoday2)
+    return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l)
+
+
+@app.route('/add', methods=['POST'])
+async def add():
+    if not _camera_lock.acquire(blocking=False):
+        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+        return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+                               totalreg=totalreg(), datetoday2=datetoday2,
+                               mess='Camera is in use. Please wait for Take Attendance or Add User to finish, then try again.')
+    try:
+        newusername = request.form['newusername']
+        newuserid = request.form['newuserid']
+        data = await asyncio.to_thread(_add_user, newusername, newuserid)
+        return render_template('home.html', **data, totalreg=totalreg(), datetoday2=datetoday2)
+    finally:
+        _camera_lock.release()
 
 
 if __name__ == '__main__':
