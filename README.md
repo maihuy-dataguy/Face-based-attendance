@@ -14,6 +14,25 @@ Our system leverages facial recognition technology to streamline the attendance 
 - **User-Friendly Interface:** Implemented using HTML, Bootstrap, and JavaScript for a smooth user experience.
 - **Efficient Backend:** Powered by Flask, ensuring a robust and scalable application.
 
+## Project layout
+
+| Path | Role |
+|------|------|
+| `app.py` | Flask app entry: `SECRET_KEY`, `register_routes()` |
+| `config.py` | Paths (`static/faces`, `faces_KNN`, attendance dirs), dates, `ensure_data_dirs()` |
+| `extensions.py` | Shared `camera_lock` (serialize camera + face_recognition work) |
+| `routes/views.py` | Blueprint `main`: HTTP routes only |
+| `services/camera.py` | Webcam + Haar boxes |
+| `services/knn.py` | Train / predict KNN, `retrain_knn_model()` |
+| `services/encodings.py` | Known faces pickle, face locations, direct matching |
+| `services/attendance.py` | Today’s CSV read/write |
+| `services/storage.py` | User folder listing, `totalreg()`, safe paths |
+| `services/users.py` | Delete user folder + retrain / rebuild pickle |
+| `services/capture.py` | Take attendance loop, add user, model checks |
+| `templates/` | Jinja HTML (`base.html`, `home.html`, `users.html`) |
+
+Run the app from the project root: `python app.py`.
+
 ## Getting Started
 
 To get started, please follow the instructions below:

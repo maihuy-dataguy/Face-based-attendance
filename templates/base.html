@@ -37,7 +37,7 @@
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
         <div class="container-fluid">
-            <a class="navbar-brand" href="{{ url_for('home') }}">
+            <a class="navbar-brand" href="{{ url_for('main.home') }}">
                 <i class="material-icons align-middle" style="vertical-align: middle;">face</i> Attendance
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain" aria-controls="navMain" aria-expanded="false" aria-label="Toggle navigation">
@@ -46,10 +46,10 @@
             <div class="collapse navbar-collapse" id="navMain">
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                     <li class="nav-item">
-                        <a class="nav-link {% if active_page == 'home' %}active fw-bold{% endif %}" href="{{ url_for('home') }}">Home</a>
+                        <a class="nav-link {% if active_page == 'home' %}active fw-bold{% endif %}" href="{{ url_for('main.home') }}">Home</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {% if active_page == 'users' %}active fw-bold{% endif %}" href="{{ url_for('users_list') }}">List users</a>
+                        <a class="nav-link {% if active_page == 'users' %}active fw-bold{% endif %}" href="{{ url_for('main.users_list') }}">List users</a>
                     </li>
                 </ul>
                 <div class="d-flex align-items-center flex-wrap gap-2 text-white">
@@ -58,7 +58,7 @@
                     {% else %}
                     <span class="badge bg-info text-dark mode-badge">Direct</span>
                     {% endif %}
-                    <form action="{{ url_for('toggle_recognition_mode') }}" method="post" class="m-0">
+                    <form action="{{ url_for('main.toggle_recognition_mode') }}" method="post" class="m-0">
                         <button type="submit" class="btn btn-sm btn-outline-light">
                             {% if use_knn %}Switch to direct{% else %}Switch to KNN{% endif %}
                         </button>

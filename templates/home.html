@@ -18,7 +18,7 @@
             <h2 style="border-radius: 20px 20px 0px 0px;background-color: #0b4c61;color: white;padding: 10px;">Today's
                 Attendance <i class="material-icons">assignment</i>
             </h2>
-            <a style="text-decoration: none;" href="/start">
+            <a style="text-decoration: none;" href="{{ url_for('main.start') }}">
                 <button style="font-size: 24px;font-weight: bold;border-radius: 10px;width:320px;padding: 10px;margin-top: 20px;margin-bottom: 20px;"
                     type='button' class='btn btn-primary'>Take Attendance <i class="material-icons">beenhere</i></button>
             </a>
@@ -48,7 +48,7 @@
         </div>
         <div class="col"
             style="border-radius: 20px;padding: 0px;background-color:rgba(211, 211, 211, 0.911);margin:0px 10px 10px 10px;height: 400px;">
-            <form action='/add' method="POST" enctype="multipart/form-data">
+            <form action="{{ url_for('main.add') }}" method="POST" enctype="multipart/form-data">
                 <h2 style="border-radius: 20px 20px 0px 0px;background-color: #0b4c61;color: white;padding: 10px;">Add
                     New User <i class="material-icons">control_point_duplicate</i></h2>
                 <label style="font-size: 20px;"><b>Enter New User Name*</b></label>
