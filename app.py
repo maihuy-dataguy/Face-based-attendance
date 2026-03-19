@@ -8,7 +8,7 @@ import time
 import pickle
 import numpy as np
 import pandas as pd
-from flask import Flask, request, render_template
+from flask import Flask, request, render_template, session, redirect, url_for
 from datetime import date, datetime
 from sklearn import neighbors
 
@@ -16,16 +16,37 @@ import face_recognition
 
 #### Defining Flask App
 app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-change-in-production')
 
 #### Saving Date today in 2 different formats
 datetoday = date.today().strftime("%m_%d_%y")
 datetoday2 = date.today().strftime("%d-%B-%Y")
+
+# Non-KNN (direct): static/faces + Attendance/
+# KNN: static/faces_KNN + Attendance_KNN/
+FACES_DIR = 'static/faces'
+FACES_KNN_DIR = 'static/faces_KNN'
+ATTENDANCE_DIR = 'Attendance'
+ATTENDANCE_KNN_DIR = 'Attendance_KNN'
 
 KNOWN_FACES_PATH = 'static/known_faces.pkl'
 KNN_MODEL_PATH = 'static/trained_knn_model.clf'
 
 # Only one camera operation at a time (Take Attendance or Add User); prevents crash when both run together
 _camera_lock = threading.Lock()
+
+
+def faces_dir(use_knn):
+    return FACES_KNN_DIR if use_knn else FACES_DIR
+
+
+def attendance_dir(use_knn):
+    return ATTENDANCE_KNN_DIR if use_knn else ATTENDANCE_DIR
+
+
+def attendance_csv_path(use_knn):
+    return os.path.join(attendance_dir(use_knn), f'Attendance-{datetoday}.csv')
+
 
 def open_camera():
     """Open webcam; use DirectShow on Windows to avoid MSMF warning/errors."""
@@ -34,16 +55,19 @@ def open_camera():
     return cv2.VideoCapture(0)
 
 
-#### If these directories don't exist, create them
-if not os.path.isdir('Attendance'):
-    os.makedirs('Attendance')
-if not os.path.isdir('static/faces'):
-    os.makedirs('static/faces')
-if f'Attendance-{datetoday}.csv' not in os.listdir('Attendance'):
-    with open(f'Attendance/Attendance-{datetoday}.csv', 'w') as f:
-        f.write('Name,Roll,Date,Check-In,Check-Out')
+#### If these directories / CSVs don't exist, create them
+for _dir in (ATTENDANCE_DIR, ATTENDANCE_KNN_DIR, FACES_DIR, FACES_KNN_DIR):
+    if not os.path.isdir(_dir):
+        os.makedirs(_dir)
 
-# Haar cascade for Add User (capture 50 face crops without running dlib on webcam)
+for _use_knn in (False, True):
+    _csv = attendance_csv_path(_use_knn)
+    _folder = attendance_dir(_use_knn)
+    if f'Attendance-{datetoday}.csv' not in os.listdir(_folder):
+        with open(_csv, 'w') as f:
+            f.write('Name,Roll,Date,Check-In,Check-Out')
+
+# Haar cascade for Add User (KNN: capture face crops; direct: optional hint on frame)
 _haar_face = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 
@@ -106,7 +130,7 @@ def predict_with_knn(face_encoding, model_path, distance_threshold=0.6):
 
 
 def get_known_faces():
-    """Load (encodings, names) from pickle or build from static/faces folders."""
+    """Load (encodings, names) from pickle or build from static/faces (non-KNN only)."""
     if os.path.isfile(KNOWN_FACES_PATH):
         try:
             with open(KNOWN_FACES_PATH, 'rb') as f:
@@ -123,14 +147,13 @@ def get_known_faces():
 
 
 def _build_known_faces_from_folders():
-    """Build known face encodings from static/faces/{name_id}/*.jpg"""
+    """Build known face encodings from static/faces/{name_id}/* (one full photo per user is enough)."""
     encodings = []
     names = []
-    faces_dir = 'static/faces'
-    if not os.path.isdir(faces_dir):
+    if not os.path.isdir(FACES_DIR):
         return encodings, names
-    for user in os.listdir(faces_dir):
-        user_path = os.path.join(faces_dir, user)
+    for user in os.listdir(FACES_DIR):
+        user_path = os.path.join(FACES_DIR, user)
         if not os.path.isdir(user_path):
             continue
         user_encodings = []
@@ -151,8 +174,11 @@ def _build_known_faces_from_folders():
     return encodings, names
 
 
-def totalreg():
-    return len(os.listdir('static/faces'))
+def totalreg(use_knn=False):
+    d = faces_dir(use_knn)
+    if not os.path.isdir(d):
+        return 0
+    return len([x for x in os.listdir(d) if os.path.isdir(os.path.join(d, x))])
 
 
 def extract_faces_rgb(rgb_frame, small_frame=None):
@@ -188,8 +214,9 @@ def identify_face_from_encoding(face_encoding, known_encodings, known_names, tol
     return None
 
 
-def extract_attendance():
-    df = pd.read_csv(f'Attendance/Attendance-{datetoday}.csv')
+def extract_attendance(use_knn=False):
+    csv_path = attendance_csv_path(use_knn)
+    df = pd.read_csv(csv_path)
     names = df['Name']
     rolls = df['Roll']
     if 'Date' in df.columns:
@@ -224,9 +251,9 @@ def _ensure_attendance_format(df):
     return df
 
 
-def _is_checked_in_today(name):
+def _is_checked_in_today(name, use_knn=False):
     userid = name.split('_')[1]
-    csv_path = f'Attendance/Attendance-{datetoday}.csv'
+    csv_path = attendance_csv_path(use_knn)
     if not os.path.isfile(csv_path):
         return False
     df = pd.read_csv(csv_path)
@@ -235,11 +262,11 @@ def _is_checked_in_today(name):
     return int(userid) in list(df['Roll'])
 
 
-def add_attendance(name):
+def add_attendance(name, use_knn=False):
     username = name.split('_')[0]
     userid = name.split('_')[1]
     current_time = datetime.now().strftime("%H:%M:%S")
-    csv_path = f'Attendance/Attendance-{datetoday}.csv'
+    csv_path = attendance_csv_path(use_knn)
     df = pd.read_csv(csv_path)
     df = _ensure_attendance_format(df)
     roll_int = int(userid)
@@ -253,14 +280,32 @@ def add_attendance(name):
 
 ################## ROUTING #########################
 
+def _session_use_knn():
+    return session.get('use_knn', True)
+
+
 @app.route('/')
 async def home():
-    names, rolls, dates, check_ins, check_outs, l = extract_attendance()
-    return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l, totalreg=totalreg(), datetoday2=datetoday2)
+    use_knn = _session_use_knn()
+    names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
+    return render_template(
+        'home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+        totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
+    )
 
 
-def _attendance_camera():
-    """Open camera, wait for same face 5 sec, then record check-in or check-out once."""
+@app.route('/toggle_recognition_mode', methods=['POST'])
+async def toggle_recognition_mode():
+    session['use_knn'] = not session.get('use_knn', True)
+    return redirect(url_for('home'))
+
+
+def _attendance_camera(use_knn=True):
+    """Open camera, wait for same face 5 sec, then record check-in or check-out once.
+    use_knn: True = sklearn KNN model; False = direct compare vs mean encodings per user."""
+    known_encodings, known_names = (None, None)
+    if not use_knn:
+        known_encodings, known_names = get_known_faces()
     cap = open_camera()
     face_detected_time = None
     detected_person = None
@@ -284,10 +329,15 @@ def _attendance_camera():
                 top, right, bottom, left = y, x + w, y + h, x
                 face_encodings = face_recognition.face_encodings(rgb_frame, [(top, right, bottom, left)])
                 if face_encodings:
-                    identified_person = predict_with_knn(face_encodings[0], KNN_MODEL_PATH)
+                    if use_knn:
+                        identified_person = predict_with_knn(face_encodings[0], KNN_MODEL_PATH)
+                    else:
+                        identified_person = identify_face_from_encoding(
+                            face_encodings[0], known_encodings, known_names, tolerance=0.6
+                        )
                     if identified_person:
                         display_name = identified_person.split('_')[0]
-                        action = 'Check-out' if _is_checked_in_today(identified_person) else 'Check-in'
+                        action = 'Check-out' if _is_checked_in_today(identified_person, use_knn) else 'Check-in'
                         last_label = f'{display_name}  |  {action}'
                         last_box = (x, y, w, h)
                         text_y = max(y - 8, 24)
@@ -302,7 +352,7 @@ def _attendance_camera():
                             detected_person = identified_person
 
                         if time.time() - face_detected_time >= 2:
-                            add_attendance(detected_person)
+                            add_attendance(detected_person, use_knn)
                             break
                     else:
                         face_detected_time = None
@@ -332,46 +382,55 @@ def _attendance_camera():
 
     cap.release()
     cv2.destroyAllWindows()
-    return extract_attendance()
+    return extract_attendance(use_knn)
 
 
-def _check_model_and_reg():
-    if totalreg() == 0:
-        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+def _check_model_and_reg(use_knn=True):
+    if totalreg(use_knn) == 0:
+        names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
         return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                    totalreg=totalreg(), datetoday2=datetoday2, mess='No users in database. Please add a new user first.'), None
-    if not os.path.isfile(KNN_MODEL_PATH):
-        if totalreg() > 0:
-            train_knn('static/faces', KNN_MODEL_PATH)
+                    totalreg=totalreg(use_knn), datetoday2=datetoday2, mess='No users in database. Please add a new user first.'), None
+    if use_knn:
         if not os.path.isfile(KNN_MODEL_PATH):
-            names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+            if totalreg(use_knn) > 0:
+                train_knn(FACES_KNN_DIR, KNN_MODEL_PATH)
+            if not os.path.isfile(KNN_MODEL_PATH):
+                names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
+                return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+                            totalreg=totalreg(use_knn), datetoday2=datetoday2,
+                            mess='No trained KNN model. Please add a new user first.'), None
+    else:
+        encs, names = get_known_faces()
+        if not encs or not names:
+            names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
             return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                        totalreg=totalreg(), datetoday2=datetoday2,
-                        mess='No trained model. Please add a new user first.'), None
+                        totalreg=totalreg(use_knn), datetoday2=datetoday2,
+                        mess='No face encodings for direct mode. Add a user or switch to KNN.'), None
     return None, None
 
 
 @app.route('/start', methods=['GET'])
 async def start():
+    use_knn = _session_use_knn()
     if not _camera_lock.acquire(blocking=False):
-        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+        names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
         return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                               totalreg=totalreg(), datetoday2=datetoday2,
+                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
                                mess='Camera is in use (e.g. Add User or another Take Attendance). Please wait and try again.')
     try:
-        err, _ = _check_model_and_reg()
+        err, _ = _check_model_and_reg(use_knn=use_knn)
         if err is not None:
-            return render_template('home.html', **err)
-        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_attendance_camera)
+            return render_template('home.html', **err, use_knn=use_knn)
+        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_attendance_camera, use_knn)
         return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                               totalreg=totalreg(), datetoday2=datetoday2)
+                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn)
     finally:
         _camera_lock.release()
 
 
-def _add_user(newusername, newuserid):
-    """Blocking: capture 50 face images and train KNN. Returns template data dict."""
-    userimagefolder = f'static/faces/{newusername}_{newuserid}'
+def _add_user_knn(newusername, newuserid):
+    """Capture 50 face crops into faces_KNN, then train KNN."""
+    userimagefolder = os.path.join(FACES_KNN_DIR, f'{newusername}_{newuserid}')
     if not os.path.isdir(userimagefolder):
         os.makedirs(userimagefolder)
 
@@ -395,7 +454,7 @@ def _add_user(newusername, newuserid):
                     break
             j += 1
         cv2.putText(frame, f'Images captured: {i}/{target_count}', (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 20), 2, cv2.LINE_AA)
-        cv2.imshow('Adding New User', frame)
+        cv2.imshow('Adding New User (KNN)', frame)
         if cv2.waitKey(1) == 27:
             break
 
@@ -403,25 +462,72 @@ def _add_user(newusername, newuserid):
     cv2.destroyAllWindows()
 
     if os.path.isdir(userimagefolder) and len(os.listdir(userimagefolder)) > 0:
-        train_knn('static/faces', KNN_MODEL_PATH)
-        print(f"Saved 50 images and retrained KNN for {newusername}_{newuserid}")
+        train_knn(FACES_KNN_DIR, KNN_MODEL_PATH)
+        print(f"Saved KNN training images and retrained KNN for {newusername}_{newuserid}")
 
-    names, rolls, dates, check_ins, check_outs, l = extract_attendance()
-    return dict(names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l)
+
+def _add_user_direct(newusername, newuserid):
+    """Capture one full-frame photo into static/faces (non-KNN)."""
+    userimagefolder = os.path.join(FACES_DIR, f'{newusername}_{newuserid}')
+    if not os.path.isdir(userimagefolder):
+        os.makedirs(userimagefolder)
+
+    cap = open_camera()
+    saved = False
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        for (x, y, w, h) in _face_boxes_haar(frame):
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
+        cv2.putText(frame, 'Press SPACE: save 1 full photo | ESC: cancel', (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 0, 20), 2, cv2.LINE_AA)
+        cv2.imshow('Adding New User (direct)', frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:
+            break
+        if key == 32:  # SPACE
+            img_path = os.path.join(userimagefolder, 'photo.jpg')
+            cv2.imwrite(img_path, frame)
+            saved = True
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+    if saved:
+        if os.path.isfile(KNOWN_FACES_PATH):
+            try:
+                os.remove(KNOWN_FACES_PATH)
+            except OSError:
+                pass
+        print(f"Saved full photo for direct mode: {newusername}_{newuserid}")
+
+
+def _add_user(newusername, newuserid, use_knn=True):
+    """Add user: KNN = 50 crops + train; direct = one full frame."""
+    if use_knn:
+        _add_user_knn(newusername, newuserid)
+    else:
+        _add_user_direct(newusername, newuserid)
+    return extract_attendance(use_knn)
 
 
 @app.route('/add', methods=['POST'])
 async def add():
+    use_knn = _session_use_knn()
     if not _camera_lock.acquire(blocking=False):
-        names, rolls, dates, check_ins, check_outs, l = extract_attendance()
+        names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
         return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                               totalreg=totalreg(), datetoday2=datetoday2,
-                               mess='Camera is in use. Please wait for Take Attendance or Add User to finish, then try again.')
+                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
+                               mess='Another operation is in progress. Please wait for Take Attendance or Add User to finish, then try again.')
     try:
         newusername = request.form['newusername']
         newuserid = request.form['newuserid']
-        data = await asyncio.to_thread(_add_user, newusername, newuserid)
-        return render_template('home.html', **data, totalreg=totalreg(), datetoday2=datetoday2)
+        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_add_user, newusername, newuserid, use_knn)
+        return render_template(
+            'home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+            totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
+        )
     finally:
         _camera_lock.release()
 

@@ -88,7 +88,24 @@ text-transform: uppercase;}
         <div class="col"
             style="border-radius: 20px;padding: 0px;background-color:rgba(211, 211, 211, 0.911);margin:0px 10px 10px 10px;min-height: 400px;">
             <h2 style="border-radius: 20px 20px 0px 0px;background-color: #0b4c61;color: white;padding: 10px;">Today's
-                Attendance <i class="material-icons">assignment</i></h2>
+                Attendance <i class="material-icons">assignment</i>
+                <small style="font-size: 14px; display: block; font-weight: normal; margin-top: 6px;">
+                    {% if use_knn %}Sheet: Attendance_KNN{% else %}Sheet: Attendance{% endif %}
+                </small>
+            </h2>
+            <p style="margin-top: 12px; font-size: 16px; color: #0b4c61;">
+                <b>Recognition:</b>
+                {% if use_knn %}
+                <span class="badge bg-primary">KNN classifier</span>
+                {% else %}
+                <span class="badge bg-info text-dark">Direct (mean encoding)</span>
+                {% endif %}
+            </p>
+            <form action="{{ url_for('toggle_recognition_mode') }}" method="post" style="margin-bottom: 8px;">
+                <button type="submit" class="btn btn-outline-secondary btn-sm">
+                    {% if use_knn %}Switch to direct (no KNN){% else %}Switch to KNN{% endif %}
+                </button>
+            </form>
             <a style="text-decoration: none;" href="/start">
                 <button style="font-size: 24px;font-weight: bold;border-radius: 10px;width:320px;padding: 10px;margin-top: 20px;margin-bottom: 20px;"
                     type='button' class='btn btn-primary'>Take Attendance <i class="material-icons">beenhere</i></button>
@@ -132,6 +149,11 @@ text-transform: uppercase;}
                 <input type="number" id="newusereid" name='newuserid'
                     style="font-size: 20px;margin-top:10px;margin-bottom:10px;" required>
                 <br>
+                {% if use_knn %}
+                <p style="font-size: 14px; color: #333; margin: 10px 12px;">KNN: 50 face crops will be captured automatically.</p>
+                {% else %}
+                <p style="font-size: 14px; color: #333; margin: 10px 12px;">Direct: camera opens — press <b>SPACE</b> once to save <b>one full photo</b>.</p>
+                {% endif %}
                 <button style="width: 232px;margin-top: 20px;font-size: 20px;" type='submit' class='btn btn-dark'>Add
                     New User
                 </button>
