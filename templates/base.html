@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6" crossorigin="anonymous">
+    <title>{% block title %}Face Recognition Attendance{% endblock %}</title>
+    <style type="text/css">
+        * { padding: 0; margin: 0; font-family: 'Segoe UI', Tahoma; }
+        p { text-align: center; text-decoration: none; text-transform: uppercase; }
+        body {
+            background-image: url('/static/background.jpg');
+            background-size: cover;
+            font-family: Snell Roundhand, cursive;
+            min-height: 100vh;
+            padding: 0;
+            margin: 0;
+        }
+        h6 { font-family: Snell Roundhand, cursive; }
+        table { border: 1px; font-family: Snell Roundhand, cursive; border-collapse: collapse; width: 86%; margin: auto; }
+        td, th { border: 1px solid black !important; font-family: Snell Roundhand, cursive; padding: 5px; }
+        tr:nth-child(even) { background-color: #dddddd; }
+        .app-navbar {
+            background-color: #0b4c61;
+            padding: 0.5rem 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .app-navbar .nav-link { color: rgba(255,255,255,0.85) !important; font-weight: 500; }
+        .app-navbar .nav-link:hover, .app-navbar .nav-link.active { color: #fff !important; }
+        .app-navbar .navbar-brand { color: #fff !important; font-weight: 600; }
+        .mode-badge { font-size: 0.85rem; }
+    </style>
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('home') }}">
+                <i class="material-icons align-middle" style="vertical-align: middle;">face</i> Attendance
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain" aria-controls="navMain" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon" style="filter: invert(1);"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navMain">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'home' %}active fw-bold{% endif %}" href="{{ url_for('home') }}">Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'users' %}active fw-bold{% endif %}" href="{{ url_for('users_list') }}">List users</a>
+                    </li>
+                </ul>
+                <div class="d-flex align-items-center flex-wrap gap-2 text-white">
+                    {% if use_knn %}
+                    <span class="badge bg-info text-dark mode-badge">KNN</span>
+                    {% else %}
+                    <span class="badge bg-info text-dark mode-badge">Direct</span>
+                    {% endif %}
+                    <form action="{{ url_for('toggle_recognition_mode') }}" method="post" class="m-0">
+                        <button type="submit" class="btn btn-sm btn-outline-light">
+                            {% if use_knn %}Switch to direct{% else %}Switch to KNN{% endif %}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-3">
+        {% if mess %}
+        <p class="text-center" style="color: red; font-size: 18px;">{{ mess }}</p>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoGTCv4X0VpDuOr+mWf" crossorigin="anonymous"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

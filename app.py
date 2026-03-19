@@ -1,5 +1,6 @@
 import asyncio
 import math
+import shutil
 import threading
 import cv2
 import os
@@ -181,6 +182,83 @@ def totalreg(use_knn=False):
     return len([x for x in os.listdir(d) if os.path.isdir(os.path.join(d, x))])
 
 
+def _parse_folder_display(folder):
+    """Folder name is {name}_{id}; split on last underscore."""
+    parts = folder.rsplit('_', 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return folder, '—'
+
+
+def _list_user_rows(base_dir):
+    """List of dicts: folder, display_name, user_id for template tables."""
+    rows = []
+    if not os.path.isdir(base_dir):
+        return rows
+    for name in sorted(os.listdir(base_dir)):
+        path = os.path.join(base_dir, name)
+        if not os.path.isdir(path):
+            continue
+        display_name, user_id = _parse_folder_display(name)
+        rows.append({'folder': name, 'display_name': display_name, 'user_id': user_id})
+    return rows
+
+
+def _safe_user_folder(base, folder):
+    """Resolve user folder path or None if invalid / path traversal."""
+    if not folder or '..' in folder or '/' in folder or '\\' in folder:
+        return None
+    base = os.path.normpath(os.path.abspath(base))
+    path = os.path.normpath(os.path.abspath(os.path.join(base, folder)))
+    if not path.startswith(base + os.sep):
+        return None
+    if not os.path.isdir(path):
+        return None
+    return path
+
+
+def _retrain_knn_model():
+    """Retrain or remove KNN file after user folder changes."""
+    if totalreg(True) == 0:
+        if os.path.isfile(KNN_MODEL_PATH):
+            try:
+                os.remove(KNN_MODEL_PATH)
+            except OSError:
+                pass
+        return
+    train_knn(FACES_KNN_DIR, KNN_MODEL_PATH)
+
+
+def _rebuild_known_faces_pickle_full():
+    """Rebuild known_faces.pkl from static/faces (direct mode)."""
+    if os.path.isfile(KNOWN_FACES_PATH):
+        try:
+            os.remove(KNOWN_FACES_PATH)
+        except OSError:
+            pass
+    encodings, names = _build_known_faces_from_folders()
+    if encodings:
+        with open(KNOWN_FACES_PATH, 'wb') as f:
+            pickle.dump({'encodings': encodings, 'names': names}, f)
+
+
+def _delete_user_folder_and_retrain(mode, folder):
+    """Remove user folder; retrain KNN or rebuild known_faces.pkl. Returns True if deleted."""
+    base = FACES_KNN_DIR if mode == 'knn' else FACES_DIR
+    path = _safe_user_folder(base, folder)
+    if not path:
+        return False
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        return False
+    if mode == 'knn':
+        _retrain_knn_model()
+    else:
+        _rebuild_known_faces_pickle_full()
+    return True
+
+
 def extract_faces_rgb(rgb_frame, small_frame=None):
     """
     Detect faces using face_recognition. Returns list of (x, y, w, h) in original frame coordinates.
@@ -290,14 +368,48 @@ async def home():
     names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
     return render_template(
         'home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-        totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
+        totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn, active_page='home',
     )
+
+
+@app.route('/users')
+async def users_list():
+    mess = session.pop('flash_mess', None)
+    use_knn = _session_use_knn()
+    rows = _list_user_rows(FACES_KNN_DIR if use_knn else FACES_DIR)
+    return render_template(
+        'users.html', rows=rows, use_knn=use_knn,
+        active_page='users', mess=mess,
+    )
+
+
+@app.route('/users/delete', methods=['POST'])
+async def delete_user():
+    mode = request.form.get('mode')
+    folder = (request.form.get('folder') or '').strip()
+    if mode not in ('knn', 'direct') or not folder:
+        session['flash_mess'] = 'Invalid request.'
+        return redirect(url_for('users_list'))
+    if not _camera_lock.acquire(blocking=False):
+        session['flash_mess'] = 'Another operation is in progress. Please try again.'
+        return redirect(url_for('users_list'))
+    try:
+        ok = await asyncio.to_thread(_delete_user_folder_and_retrain, mode, folder)
+        if ok:
+            session['flash_mess'] = (
+                'User deleted; KNN model retrained.' if mode == 'knn' else 'User deleted; known_faces.pkl rebuilt.'
+            )
+        else:
+            session['flash_mess'] = 'Could not delete user (invalid folder or error).'
+    finally:
+        _camera_lock.release()
+    return redirect(url_for('users_list'))
 
 
 @app.route('/toggle_recognition_mode', methods=['POST'])
 async def toggle_recognition_mode():
     session['use_knn'] = not session.get('use_knn', True)
-    return redirect(url_for('home'))
+    return redirect(request.referrer or url_for('home'))
 
 
 def _attendance_camera(use_knn=True):
@@ -415,15 +527,15 @@ async def start():
     if not _camera_lock.acquire(blocking=False):
         names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
         return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
+                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn, active_page='home',
                                mess='Camera is in use (e.g. Add User or another Take Attendance). Please wait and try again.')
     try:
         err, _ = _check_model_and_reg(use_knn=use_knn)
         if err is not None:
-            return render_template('home.html', **err, use_knn=use_knn)
+            return render_template('home.html', **err, use_knn=use_knn, active_page='home')
         names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_attendance_camera, use_knn)
         return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn)
+                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn, active_page='home')
     finally:
         _camera_lock.release()
 
@@ -518,7 +630,7 @@ async def add():
     if not _camera_lock.acquire(blocking=False):
         names, rolls, dates, check_ins, check_outs, l = extract_attendance(use_knn)
         return render_template('home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
+                               totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn, active_page='home',
                                mess='Another operation is in progress. Please wait for Take Attendance or Add User to finish, then try again.')
     try:
         newusername = request.form['newusername']
@@ -526,7 +638,7 @@ async def add():
         names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_add_user, newusername, newuserid, use_knn)
         return render_template(
             'home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
-            totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn,
+            totalreg=totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn, active_page='home',
         )
     finally:
         _camera_lock.release()
