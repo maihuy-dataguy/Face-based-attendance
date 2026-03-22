@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from config import attendance_csv_path, datetoday2
+from config import attendance_csv_path, datetoday2, FACES_DIR
 
 from services import attendance_mysql
 
@@ -36,6 +36,8 @@ def extract_attendance(use_knn=False):
             return empty, empty, empty, empty, empty, 0
     csv_path = attendance_csv_path(use_knn)
     df = pd.read_csv(csv_path)
+    available_names = [name.split('_')[0] for name in os.listdir(FACES_DIR) if os.path.isdir(os.path.join(FACES_DIR, name))]
+    df = df[df['Name'].isin(available_names)].reset_index(drop=True)
     names = df['Name']
     rolls = df['Roll']
     if 'Date' in df.columns:
