@@ -1,18 +1,28 @@
 # Facial-Recognition-Based-Attendance-System
 
-Welcome to the GitHub repository for the project: a Facial Recognition-Based Attendance System.
+Welcome to the GitHub repository for the project: a Facial Recognition-Based Attendance System. This project is built for presentation for Opentalk in NCC Plus.
 
 ## Project Overview
 
-Our system leverages facial recognition technology to streamline the attendance process, making it more efficient and less time-consuming. By employing machine learning algorithms Haar cascade classifiers for face detection and k-Nearest Neighbors (k-NN) for face recognition, we've created a cost-effective and lightweight architecture. This ensures optimal performance across various devices, including both phones and PCs, making it accessible to schools with limited resources.
+Our system leverages facial recognition technology to streamline the attendance process, making it more efficient and less time-consuming.
+Implementing 2 aprroaches:
+
+- Face_recognition library (just checking if two faces match or not (True or False), it's helpful to see how similar they are)
+- Face_recognition library + KNN model (This example is useful when you wish to recognize a large set of known people,
+  and make a prediction for an unknown person in a feasible computation time. Instead of checking similarity accross all faces in DB)
+
+This ensures optimal performance across various devices, including both phones and PCs, making it accessible to schools with limited resources.
 
 ### Key Features
 
 - **Low Computational Cost:** Designed with resource constraints in mind, ensuring it runs smoothly on minimal hardware.
 - **Cross-Platform Compatibility:** Works seamlessly on both phones and PCs, providing flexibility in usage.
-- **Sustainable Solution:** A collaboration with local non-profits to support educational institutions in Pakistan.
 - **User-Friendly Interface:** Implemented using HTML, Bootstrap, and JavaScript for a smooth user experience.
 - **Efficient Backend:** Powered by Flask, ensuring a robust and scalable application.
+
+## Demo
+
+![face-attendance-system](https://github.com/maihuy-dataguy/Face-based-attendance/blob/main/flask.jpg)
 
 ## Project layout
 
@@ -81,4 +91,7 @@ Ensure you have the following installed:
 
 ## Future Work
 
-The current iteration of our system leverages traditional Machine Learning algorithms for facial detection and identification tasks. Moving forward, we aim to explore and integrate Deep Learning techniques to enhance the system's accuracy and efficiency.
+We can integrate Face Anti-Spoofing (liveness detection) into our system to differentiate between fake and real people, preventing false facial verification by using a photo, video, mask or a different substitute for an authorized person’s face.
+
+- Print attack: The attacker shows the picture of other person printed on a sheet of paper
+- Replay attack: The attacker shows the screen of another device that plays a pre-recorded photo/video of the other person.
