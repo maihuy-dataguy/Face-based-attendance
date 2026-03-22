@@ -6,4 +6,4 @@ static/faces_KNN/*
 static/known_faces.pkl
 static/trained_knn_model.clf
 Attendance/*
-Attendance_KNN/*
+.env

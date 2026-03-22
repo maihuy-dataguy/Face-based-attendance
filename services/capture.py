@@ -1,7 +1,7 @@
 """OpenCV camera loops: take attendance, add user, model checks."""
 import os
 import time
-
+import shutil
 import cv2
 import face_recognition
 
@@ -11,6 +11,12 @@ from services import attendance as attendance_svc
 from services import encodings
 from services import knn
 from services.camera import face_boxes_haar, open_camera
+
+
+def _is_quit_key(key):
+    """Take Attendance: ESC or Q/q to close the camera window."""
+    k = key & 0xFF
+    return k == 27 or k in (ord('q'), ord('Q'))
 
 
 def attendance_camera(use_knn=True):
@@ -47,7 +53,7 @@ def attendance_camera(use_knn=True):
                             face_encs[0], known_encodings, known_names, tolerance=0.6
                         )
                     if identified_person:
-                        display_name = identified_person.split('_')[0]
+                        display_name = identified_person.rsplit('_', 1)[0]
                         action = 'Check-out' if attendance_svc.is_checked_in_today(identified_person, use_knn) else 'Check-in'
                         last_label = f'{display_name}  |  {action}'
                         last_box = (x, y, w, h)
@@ -86,8 +92,10 @@ def attendance_camera(use_knn=True):
                 cv2.putText(frame, last_label, (x, max(y - 8, 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 20) if last_label != 'Unknown' else (0, 0, 255), 2, cv2.LINE_AA)
 
         process_this_frame = not process_this_frame
+        h, w = frame.shape[:2]
+        cv2.putText(frame, 'ESC or Q: quit', (10, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.imshow('Attendance', frame)
-        if cv2.waitKey(1) == 27:
+        if _is_quit_key(cv2.waitKey(1)):
             break
 
     cap.release()
@@ -97,7 +105,16 @@ def attendance_camera(use_knn=True):
 
 def check_model_and_reg(use_knn=True):
     """Returns (error_dict, None) if cannot start attendance, else (None, None)."""
+    from services import attendance_mysql
     from services import storage
+
+    if use_knn and not attendance_mysql._ping_db():
+        names, rolls, dates, check_ins, check_outs, l = attendance_svc.extract_attendance(use_knn)
+        return dict(
+            names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
+            totalreg=storage.totalreg(use_knn), datetoday2=datetoday2,
+            mess='Cannot connect to MySQL. Set MYSQL_URI and create the database (see sql/schema.sql).',
+        ), None
 
     if storage.totalreg(use_knn) == 0:
         names, rolls, dates, check_ins, check_outs, l = attendance_svc.extract_attendance(use_knn)
@@ -164,6 +181,9 @@ def add_user_knn(newusername, newuserid):
 
     if os.path.isdir(userimagefolder) and len(os.listdir(userimagefolder)) > 0:
         knn.train_knn(FACES_KNN_DIR, KNN_MODEL_PATH)
+        from services.attendance_mysql import register_user_if_needed
+
+        register_user_if_needed(newusername, str(newuserid))
         print(f"Saved KNN training images and retrained KNN for {newusername}_{newuserid}")
 
 
@@ -185,6 +205,7 @@ def add_user_direct(newusername, newuserid):
         cv2.imshow('Adding New User (direct)', frame)
         key = cv2.waitKey(1) & 0xFF
         if key == 27:
+            shutil.rmtree(userimagefolder)
             break
         if key == 32:
             img_path = os.path.join(userimagefolder, 'photo.jpg')

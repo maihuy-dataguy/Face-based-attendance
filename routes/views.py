@@ -1,7 +1,7 @@
 """HTTP routes (thin handlers; logic lives in services/)."""
 import asyncio
 
-from flask import Blueprint, render_template, request, session, redirect, url_for
+from flask import Blueprint, current_app, render_template, request, session, redirect, url_for
 
 from config import FACES_DIR, FACES_KNN_DIR, datetoday2
 from extensions import camera_lock
@@ -48,8 +48,14 @@ async def delete_user():
     if not camera_lock.acquire(blocking=False):
         session['flash_mess'] = 'Another operation is in progress. Please try again.'
         return redirect(url_for('main.users_list'))
+    app_obj = current_app._get_current_object()
+
+    def _run_delete():
+        with app_obj.app_context():
+            return users_svc.delete_user_folder_and_retrain(mode, folder)
+
     try:
-        ok = await asyncio.to_thread(users_svc.delete_user_folder_and_retrain, mode, folder)
+        ok = await asyncio.to_thread(_run_delete)
         if ok:
             session['flash_mess'] = (
                 'User deleted; KNN model retrained.' if mode == 'knn' else 'User deleted; known_faces.pkl rebuilt.'
@@ -70,6 +76,8 @@ async def toggle_recognition_mode():
 @bp.route('/start', methods=['GET'])
 async def start():
     use_knn = _session_use_knn()
+    app_obj = current_app._get_current_object()
+
     if not camera_lock.acquire(blocking=False):
         names, rolls, dates, check_ins, check_outs, l = attendance_svc.extract_attendance(use_knn)
         return render_template(
@@ -81,7 +89,12 @@ async def start():
         err, _ = capture.check_model_and_reg(use_knn=use_knn)
         if err is not None:
             return render_template('home.html', **err, use_knn=use_knn, active_page='home')
-        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(capture.attendance_camera, use_knn)
+
+        def _run_camera():
+            with app_obj.app_context():
+                return capture.attendance_camera(use_knn)
+
+        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_run_camera)
         return render_template(
             'home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
             totalreg=storage.totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn, active_page='home',
@@ -93,6 +106,8 @@ async def start():
 @bp.route('/add', methods=['POST'])
 async def add():
     use_knn = _session_use_knn()
+    app_obj = current_app._get_current_object()
+
     if not camera_lock.acquire(blocking=False):
         names, rolls, dates, check_ins, check_outs, l = attendance_svc.extract_attendance(use_knn)
         return render_template(
@@ -103,9 +118,12 @@ async def add():
     try:
         newusername = request.form['newusername']
         newuserid = request.form['newuserid']
-        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(
-            capture.add_user, newusername, newuserid, use_knn
-        )
+
+        def _run_add():
+            with app_obj.app_context():
+                return capture.add_user(newusername, newuserid, use_knn)
+
+        names, rolls, dates, check_ins, check_outs, l = await asyncio.to_thread(_run_add)
         return render_template(
             'home.html', names=names, rolls=rolls, dates=dates, check_ins=check_ins, check_outs=check_outs, l=l,
             totalreg=storage.totalreg(use_knn), datetoday2=datetoday2, use_knn=use_knn, active_page='home',

@@ -1,10 +1,12 @@
-"""Read/write today's attendance CSV (per KNN vs direct)."""
+"""Attendance: KNN → MySQL; direct mode → CSV."""
 import os
 from datetime import datetime
 
 import pandas as pd
 
 from config import attendance_csv_path, datetoday2
+
+from services import attendance_mysql
 
 
 def _ensure_attendance_format(df):
@@ -26,6 +28,12 @@ def _ensure_attendance_format(df):
 
 
 def extract_attendance(use_knn=False):
+    if use_knn:
+        try:
+            return attendance_mysql.extract_attendance_knn()
+        except Exception:
+            empty = pd.Series([], dtype=object)
+            return empty, empty, empty, empty, empty, 0
     csv_path = attendance_csv_path(use_knn)
     df = pd.read_csv(csv_path)
     names = df['Name']
@@ -45,7 +53,12 @@ def extract_attendance(use_knn=False):
 
 
 def is_checked_in_today(name, use_knn=False):
-    userid = name.split('_')[1]
+    if use_knn:
+        try:
+            return attendance_mysql.is_checked_in_today_knn(name)
+        except Exception:
+            return False
+    userid = name.rsplit('_', 1)[1]
     csv_path = attendance_csv_path(use_knn)
     if not os.path.isfile(csv_path):
         return False
@@ -56,8 +69,10 @@ def is_checked_in_today(name, use_knn=False):
 
 
 def add_attendance(name, use_knn=False):
-    username = name.split('_')[0]
-    userid = name.split('_')[1]
+    if use_knn:
+        attendance_mysql.add_attendance_knn(name)
+        return
+    username, userid = name.rsplit('_', 1)
     current_time = datetime.now().strftime("%H:%M:%S")
     csv_path = attendance_csv_path(use_knn)
     df = pd.read_csv(csv_path)

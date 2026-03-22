@@ -1,4 +1,4 @@
-"""Paths, dates, and startup directory setup."""
+"""Paths, dates, MySQL URI, and startup directory setup."""
 import os
 from datetime import date
 
@@ -6,17 +6,22 @@ from datetime import date
 datetoday = date.today().strftime("%m_%d_%y")
 datetoday2 = date.today().strftime("%d-%B-%Y")
 
-# Non-KNN (direct): static/faces + Attendance/
-# KNN: static/faces_KNN + Attendance_KNN/
+# Direct mode: static/faces + Attendance/ CSV
+# KNN mode: static/faces_KNN + MySQL (users + attendance)
 FACES_DIR = 'static/faces'
 FACES_KNN_DIR = 'static/faces_KNN'
 ATTENDANCE_DIR = 'Attendance'
-ATTENDANCE_KNN_DIR = 'Attendance_KNN'
 
 KNOWN_FACES_PATH = 'static/known_faces.pkl'
 KNN_MODEL_PATH = 'static/trained_knn_model.clf'
 
 SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-change-in-production')
+
+# MySQL for KNN attendance — create DB first, e.g. CREATE DATABASE face_attendance;
+MYSQL_URI = os.environ.get(
+    'MYSQL_URI',
+    'mysql+pymysql://root:@127.0.0.1/face_attendance',
+)
 
 
 def faces_dir(use_knn):
@@ -24,7 +29,8 @@ def faces_dir(use_knn):
 
 
 def attendance_dir(use_knn):
-    return ATTENDANCE_KNN_DIR if use_knn else ATTENDANCE_DIR
+    """CSV folder only used for direct mode."""
+    return ATTENDANCE_DIR
 
 
 def attendance_csv_path(use_knn):
@@ -32,14 +38,13 @@ def attendance_csv_path(use_knn):
 
 
 def ensure_data_dirs():
-    """Create face + attendance folders and today's CSVs if missing."""
-    for _dir in (ATTENDANCE_DIR, ATTENDANCE_KNN_DIR, FACES_DIR, FACES_KNN_DIR):
+    """Create face folders and direct-mode attendance CSV only (no Attendance_KNN)."""
+    for _dir in (ATTENDANCE_DIR, FACES_DIR, FACES_KNN_DIR):
         if not os.path.isdir(_dir):
             os.makedirs(_dir)
 
-    for _use_knn in (False, True):
-        _csv = attendance_csv_path(_use_knn)
-        _folder = attendance_dir(_use_knn)
-        if f'Attendance-{datetoday}.csv' not in os.listdir(_folder):
-            with open(_csv, 'w') as f:
-                f.write('Name,Roll,Date,Check-In,Check-Out')
+    _csv = attendance_csv_path(False)
+    _folder = attendance_dir(False)
+    if f'Attendance-{datetoday}.csv' not in os.listdir(_folder):
+        with open(_csv, 'w') as f:
+            f.write('Name,Roll,Date,Check-In,Check-Out')

@@ -1,6 +1,6 @@
 # Facial-Recognition-Based-Attendance-System
 
-Welcome to the GitHub repository for the project: a Facial Recognition-Based Attendance System designed for teachers and students. This project was developed in collaboration with a local non-profit organization aiming to bring sustainable, low computational cost solutions for automatic attendance systems to resource-limited schools in Pakistan.
+Welcome to the GitHub repository for the project: a Facial Recognition-Based Attendance System.
 
 ## Project Overview
 
@@ -16,20 +16,27 @@ Our system leverages facial recognition technology to streamline the attendance 
 
 ## Project layout
 
-| Path | Role |
-|------|------|
-| `app.py` | Flask app entry: `SECRET_KEY`, `register_routes()` |
-| `config.py` | Paths (`static/faces`, `faces_KNN`, attendance dirs), dates, `ensure_data_dirs()` |
-| `extensions.py` | Shared `camera_lock` (serialize camera + face_recognition work) |
-| `routes/views.py` | Blueprint `main`: HTTP routes only |
-| `services/camera.py` | Webcam + Haar boxes |
-| `services/knn.py` | Train / predict KNN, `retrain_knn_model()` |
-| `services/encodings.py` | Known faces pickle, face locations, direct matching |
-| `services/attendance.py` | Today’s CSV read/write |
-| `services/storage.py` | User folder listing, `totalreg()`, safe paths |
-| `services/users.py` | Delete user folder + retrain / rebuild pickle |
-| `services/capture.py` | Take attendance loop, add user, model checks |
-| `templates/` | Jinja HTML (`base.html`, `home.html`, `users.html`) |
+| Path                           | Role                                                        |
+| ------------------------------ | ----------------------------------------------------------- |
+| `app.py`                       | Flask app entry: `SECRET_KEY`, `register_routes()`          |
+| `config.py`                    | Paths, `MYSQL_URI`, dates, `ensure_data_dirs()`             |
+| `models.py`                    | SQLAlchemy `User` + `Attendance` (KNN attendance in MySQL)  |
+| `extensions.py`                | `db` (SQLAlchemy), `camera_lock`                            |
+| `routes/views.py`              | Blueprint `main`: HTTP routes only                          |
+| `services/camera.py`           | Webcam + Haar boxes                                         |
+| `services/knn.py`              | Train / predict KNN, `retrain_knn_model()`                  |
+| `services/encodings.py`        | Known faces pickle, face locations, direct matching         |
+| `services/attendance.py`       | Direct mode: CSV; KNN mode: delegates to `attendance_mysql` |
+| `services/attendance_mysql.py` | MySQL attendance for KNN                                    |
+| `sql/schema.sql`               | Optional manual MySQL DDL                                   |
+| `services/storage.py`          | User folder listing, `totalreg()`, safe paths               |
+| `services/users.py`            | Delete user folder + retrain / rebuild pickle               |
+| `services/capture.py`          | Take attendance loop, add user, model checks                |
+| `templates/`                   | Jinja HTML (`base.html`, `home.html`, `users.html`)         |
+
+**KNN mode** stores attendance in **MySQL** (`users`, `attendance`). Create a database and set `MYSQL_URI` (see `.env.example`). Tables are also created automatically on startup via `db.create_all()`.
+
+**Direct mode** still uses the `Attendance/` CSV files.
 
 Run the app from the project root: `python app.py`.
 
@@ -41,7 +48,7 @@ To get started, please follow the instructions below:
 
 Ensure you have the following installed:
 
-- Python 3.12
+- Python 3.10
 - Flask
 - OpenCV
 - A suitable web browser (Chrome/Firefox)
